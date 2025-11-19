@@ -1,0 +1,193 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Monitor, Square, Film, Megaphone, Globe, Plus, ChevronLeft, ChevronRight, Radio, Flag, Activity, ExternalLink, X } from 'lucide-react';
+
+// ... [all your existing imports + TEMPLATES, DOMMonitor, HorizontalMeter, etc. remain unchanged]
+
+let externalWindow = null;
+let broadcastChannel = null;
+
+export default function VideoEngine() {
+  const [programWindowOpen, setProgramWindowOpen] = useState(false);
+  const [program, setProgram] = useState({ template: 'full', assignments: { main: 'src_cam_a' } });
+  const [preview, setPreview] = useState({ template: 'split', assignments: { left: 'src_cam_a', right: 'src_screen' } });
+  // ... all your existing state
+
+  // Open detachable Program window
+  const openProgramWindow = useCallback(() => {
+    if (externalWindow && !externalWindow.closed) {
+      externalWindow.focus();
+      return;
+    }
+
+    const width = screen.availWidth * 0.8;
+    const height = screen.availHeight * 0.8;
+    const left = screen.availLeft + (screen.availWidth - width) / 2;
+    const top = screen.availTop + (screen.availHeight - height) / 2;
+
+    externalWindow = window.open(
+      '',
+      'ProgramOutput',
+      `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=no`
+    );
+
+    if (!externalWindow) {
+      alert('Pop-up blocked! Allow pop-ups for this site to use multi-monitor mode.');
+      return;
+    }
+
+    // Inject clean Program-only UI
+    externalWindow.document.write(`
+      <!DOCTYPE html>
+      <html class="h-full bg-black">
+        <head><title>PROGRAM OUTPUT</title></head>
+        <body class="h-full m-0 overflow-hidden">
+          <div id="root" class="w-full h-full flex items-center justify-center bg-black">
+            <canvas id="programCanvas" class="max-w-full max-h-full shadow-2xl"></canvas>
+          </div>
+        </body>
+      </html>
+    `);
+    externalWindow.document.close();
+
+    // Sync state via BroadcastChannel
+    broadcastChannel = new BroadcastChannel('videoengine-program');
+    const sendUpdate = () => {
+      broadcastChannel.postMessage({ program, sources, adPlaying });
+    };
+
+    // Initial + future updates
+    sendUpdate();
+    const interval = setInterval(sendUpdate, 100);
+    
+    externalWindow.onbeforeunload = () => {
+      clearInterval(interval);
+      broadcastChannel.close();
+      setProgramWindowOpen(false);
+      externalWindow = null;
+    };
+
+    // Listen for canvas rendering from main window
+    const canvas = externalWindow.document.getElementById('programCanvas');
+    const ctx = canvas.getContext('2d');
+    const resize = () => {
+      canvas.width = canvas.clientWidth * devicePixelRatio;
+      canvas.height = canvas.clientHeight * devicePixelRatio;
+    };
+    resize();
+    externalWindow.addEventListener('resize', resize);
+
+    broadcastChannel.onmessage = (e) => {
+      const { program, sources, adPlaying } = e.data;
+      const slots = TEMPLATES[program.template].slots;
+      const assignments = program.assignments;
+
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if (adPlaying) {
+        ctx.fillStyle = '#300';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = 'red';
+        ctx.font = 'bold 120px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('ADVERTISEMENT', canvas.width/2, canvas.height/2);
+        ctx.fillStyle = 'white';
+        ctx.fillText(`${adPlaying.remaining}s`, canvas.width/2, canvas.height/2 + 140);
+      } else {
+        slots.forEach(slot => {
+          const source = sources.find(s => s.id === assignments[slot.id]);
+          const x = slot.x * canvas.width;
+          const y = slot.y * canvas.height;
+          const w = slot.w * canvas.width;
+          const h = slot.h * canvas.height;
+
+          ctx.fillStyle = source ? source.color : '#111';
+          ctx.fillRect(x, y, w, h);
+
+          if (source) {
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 60px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(source.name.toUpperCase(), x + w/2, y + h/2 + 20);
+          }
+        });
+      }
+    };
+
+    setProgramWindowOpen(true);
+  }, [program, sources, adPlaying]);
+
+  const closeProgramWindow = () => {
+    if (externalWindow) externalWindow.close();
+    setProgramWindowOpen(false);
+  };
+
+  // Auto-reopen on load if it was open last time
+  useEffect(() => {
+    const wasOpen = localStorage.getItem('programWindowOpen') === 'true';
+    if (wasOpen) openProgramWindow();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('programWindowOpen', programWindowOpen);
+  }, [programWindowOpen]);
+
+  return (
+    <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col overflow-hidden select-none">
+      {/* Top Bar – Now with Pop-Out Button */}
+      <div className="h-12 border-b border-gray-800 bg-[#111] flex items-center justify-between px-6 shadow-lg z-10">
+        <div className="flex items-center space-x-4">
+          <Monitor size={18} className="text-purple-500"/>
+          <span className="font-bold tracking-wider">VIDEO<span className="text-purple-500">ENGINE</span></span>
+        </div>
+
+        <div className="flex items-center space-x-4">
+          {programWindowOpen && (
+            <div className="text-green-400 text-xs font-bold flex items-center">
+              <ExternalLink size={14} className="mr-1"/> PROGRAM ON EXTERNAL DISPLAY
+            </div>
+          )}
+          <button
+            onClick={programWindowOpen ? closeProgramWindow : openProgramWindow}
+            className={`px-4 py-2 rounded-lg text-xs font-bold flex items-center space-x-2 transition-all ${
+              programWindowOpen 
+                ? 'bg-red-900/50 hover:bg-red-900 border border-red-600' 
+                : 'bg-green-900/50 hover:bg-green-900 border border-green-600'
+            }`}
+          >
+            {programWindowOpen ? <X size={14}/> : <ExternalLink size={14}/>}
+            <span>{programWindowOpen ? 'Close' : 'Pop Out'} Program</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main workspace – unchanged except cinema now optional */}
+      <div className="flex-1 flex relative">
+        {/* Left Sidebar – unchanged */}
+        {/* ... your existing sidebar code ... */}
+
+        {/* Right Workspace */}
+        <div className="flex-1 flex flex-col">
+          {/* Cinema Viewer – now optional when popped out */}
+          {!programWindowOpen && (
+            <div className="flex-1 flex items-center justify-center p-8 bg-[#080808]">
+              <canvas ref={canvasRef} width={3840} height={2160} className="max-w-full max-h-full shadow-2xl border-2 border-red-800/50 rounded-lg" />
+            </div>
+          )}
+          {programWindowOpen && (
+            <div className="flex-1 flex items-center justify-center bg-[#080808]">
+              <div className="text-center">
+                <Radio size={80} className="text-red-500 mx-auto mb-4 opacity-50"/>
+                <p className="text-2xl font-bold text-red-500">PROGRAM OUTPUT</p>
+                <p className="text-gray-500">Displayed on external window</p>
+              </div>
+            </div>
+          )}
+
+          {/* Dashboard – unchanged */}
+          {/* ... your existing dashboard with Preview / TAKE LIVE / Program ... */}
+        </div>
+      </div>
+    </div>
+  );
+}
